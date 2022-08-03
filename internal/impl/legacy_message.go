@@ -124,8 +124,8 @@ func legacyLoadMessageDesc(t reflect.Type, name protoreflect.FullName) protorefl
 	// from before the size cache was added. If there are any fields, check to
 	// see that at least one of them looks like something we generated.
 	if t.Elem().Kind() == reflect.Struct {
+		var hasProtoField bool
 		if nfield := t.Elem().NumField(); nfield > 0 {
-			hasProtoField := false
 			for i := 0; i < nfield; i++ {
 				f := t.Elem().Field(i)
 				if f.Tag.Get("protobuf") != "" || f.Tag.Get("protobuf_oneof") != "" || strings.HasPrefix(f.Name, "XXX_") {
@@ -133,7 +133,19 @@ func legacyLoadMessageDesc(t reflect.Type, name protoreflect.FullName) protorefl
 					break
 				}
 			}
-			if !hasProtoField {
+		}
+		if !hasProtoField {
+			var hasProtoMethod bool
+			if nmethod := t.NumMethod(); nmethod > 0 {
+				for i := 0; i < nmethod; i++ {
+					m := t.Method(i)
+					if strings.HasPrefix(m.Name, "XXX_") {
+						hasProtoMethod = true
+						break
+					}
+				}
+			}
+			if !hasProtoMethod {
 				return aberrantLoadMessageDesc(t, name)
 			}
 		}
