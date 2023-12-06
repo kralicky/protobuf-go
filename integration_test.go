@@ -35,33 +35,32 @@ var (
 	regenerate   = flag.Bool("regenerate", false, "regenerate files")
 	buildRelease = flag.Bool("buildRelease", false, "build release binaries")
 
-	protobufVersion = "344f6dee76ea858acfd4fd575ab386438256842b"
-	protobufSHA256  = "" // ignored if protobufVersion is a git hash
+	protobufVersion = "25.1"
 
 	golangVersions = func() []string {
-		var vers []string
-		switch runtime.GOOS + "/" + runtime.GOARCH {
-		case "darwin/arm64":
-		default:
-			vers = []string{"1.13.15", "1.14.15", "1.15.15"}
+		// Version policy: same version as is in the x/ repos' go.mod.
+		return []string{
+			"1.17.13",
+			"1.18.10",
+			"1.19.13",
+			"1.20.7",
+			"1.21.1",
 		}
-		return append(vers, "1.16.15", "1.17.13", "1.18.10", "1.19.6")
 	}()
 	golangLatest = golangVersions[len(golangVersions)-1]
 
-	staticcheckVersion = "2022.1.2"
+	staticcheckVersion = "2023.1.6"
 	staticcheckSHA256s = map[string]string{
-		"darwin/amd64": "baa35f8fb967ee2aacad57f026e3724fbf8d9b7ad8f682f4d44b2084a96e103b",
-		"darwin/arm64": "9f01a581eeea088d0a6272538360f6d84996d66ae554bfada8026fe24991daa0",
-		"linux/386":    "4cf74373e5d668b265d7a241b59ba7d26064f2cd6af50b77e62c2b3e2f3afb43",
-		"linux/amd64":  "6dbb7187e43812fa23363cdaaa90ab13544dd36e24d02e2347014e4cf265f06d",
+		"darwin/amd64": "b14a0cbd3c238713f5f9db41550893ea7d75d8d7822491c7f4e33e2fe43f6305",
+		"darwin/arm64": "f1c869abe6be2c6ab727dc9d6049766c947534766d71a1798c12a37526ea2b6f",
+		"linux/386":    "02859a7c44c7b5ab41a70d9b8107c01ab8d2c94075bae3d0b02157aff743ca42",
+		"linux/amd64":  "45337834da5dc7b8eff01cb6b3837e3759503cfbb8edf36b09e42f32bccb1f6e",
 	}
 
 	// purgeTimeout determines the maximum age of unused sub-directories.
 	purgeTimeout = 30 * 24 * time.Hour // 1 month
 
 	// Variables initialized by mustInitDeps.
-	goPath       string
 	modulePath   string
 	protobufPath string
 )
@@ -124,19 +123,18 @@ func Test(t *testing.T) {
 			}()
 		}
 
-		workDir := filepath.Join(goPath, "src", modulePath)
-		runGo("Normal", command{Dir: workDir}, "go", "test", "-race", "./...")
-		runGo("PureGo", command{Dir: workDir}, "go", "test", "-race", "-tags", "purego", "./...")
-		runGo("Reflect", command{Dir: workDir}, "go", "test", "-race", "-tags", "protoreflect", "./...")
+		runGo("Normal", command{}, "go", "test", "-race", "./...")
+		runGo("PureGo", command{}, "go", "test", "-race", "-tags", "purego", "./...")
+		runGo("Reflect", command{}, "go", "test", "-race", "-tags", "protoreflect", "./...")
 		if goVersion == golangLatest {
-			runGo("ProtoLegacy", command{Dir: workDir}, "go", "test", "-race", "-tags", "protolegacy", "./...")
+			runGo("ProtoLegacy", command{}, "go", "test", "-race", "-tags", "protolegacy", "./...")
 			runGo("ProtocGenGo", command{Dir: "cmd/protoc-gen-go/testdata"}, "go", "test")
 			runGo("Conformance", command{Dir: "internal/conformance"}, "go", "test", "-execute")
 
 			// Only run the 32-bit compatibility tests for Linux;
 			// avoid Darwin since 10.15 dropped support i386 code execution.
 			if runtime.GOOS == "linux" {
-				runGo("Arch32Bit", command{Dir: workDir, Env: append(os.Environ(), "GOARCH=386")}, "go", "test", "./...")
+				runGo("Arch32Bit", command{Env: append(os.Environ(), "GOARCH=386")}, "go", "test", "./...")
 			}
 		}
 	}
@@ -298,17 +296,6 @@ func mustInitDeps(t *testing.T) {
 
 	// Set a cache directory outside the test directory.
 	check(os.Setenv("GOCACHE", filepath.Join(repoRoot, ".gocache")))
-
-	// Setup GOPATH for pre-module support (i.e., go1.10 and earlier).
-	goPath = startWork("gopath")
-	modulePath = strings.TrimSpace(command{Dir: testDir}.mustRun(t, "go", "list", "-m", "-f", "{{.Path}}"))
-	check(os.RemoveAll(filepath.Join(goPath, "src")))
-	check(os.MkdirAll(filepath.Join(goPath, "src", filepath.Dir(modulePath)), 0775))
-	check(os.Symlink(repoRoot, filepath.Join(goPath, "src", modulePath)))
-	command{Dir: repoRoot}.mustRun(t, "go", "mod", "tidy")
-	command{Dir: repoRoot}.mustRun(t, "go", "mod", "vendor")
-	check(os.Setenv("GOPATH", goPath))
-	finishWork()
 }
 
 func downloadFile(check func(error), dstPath, srcURL string) {
@@ -380,8 +367,8 @@ func downloadArchive(check func(error), dstPath, srcURL, skipPrefix, wantSHA256 
 func mustHandleFlags(t *testing.T) {
 	if *regenerate {
 		t.Run("Generate", func(t *testing.T) {
-			fmt.Print(mustRunCommand(t, "go", "run", "-tags", "protolegacy", "./internal/cmd/generate-types", "-execute"))
-			fmt.Print(mustRunCommand(t, "go", "run", "-tags", "protolegacy", "./internal/cmd/generate-protos", "-execute"))
+			fmt.Print(mustRunCommand(t, "go", "generate", "./internal/cmd/generate-types"))
+			fmt.Print(mustRunCommand(t, "go", "generate", "./internal/cmd/generate-protos"))
 			files := strings.Split(strings.TrimSpace(mustRunCommand(t, "git", "ls-files", "*.go")), "\n")
 			mustRunCommand(t, append([]string{"gofmt", "-w"}, files...)...)
 		})

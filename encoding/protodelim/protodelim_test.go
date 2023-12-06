@@ -7,6 +7,7 @@ package protodelim_test
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"io"
 	"testing"
@@ -74,35 +75,6 @@ func TestRoundTrip(t *testing.T) {
 // Just a wrapper so that UnmarshalFrom doesn't recognize this as a bufio.Reader
 type notBufioReader struct {
 	*bufio.Reader
-}
-
-func TestUnmarshalFromBufioAllocations(t *testing.T) {
-	// Use a proto which won't require an additional allocations during unmarshalling.
-	// Write to buf
-	buf := &bytes.Buffer{}
-	m := &test3.TestAllTypes{SingularInt32: 1}
-	if n, err := protodelim.MarshalTo(buf, m); err != nil {
-		t.Errorf("protodelim.MarshalTo(_, %v) = %d, %v", m, n, err)
-	}
-	reader := bufio.NewReaderSize(nil, 1<<20)
-	got := &test3.TestAllTypes{}
-
-	allocs := testing.AllocsPerRun(5, func() {
-		// Read from buf.
-		reader.Reset(bytes.NewBuffer(buf.Bytes()))
-		err := protodelim.UnmarshalFrom(reader, got)
-		if err != nil {
-			t.Fatalf("protodelim.UnmarshalFrom(_) = %v", err)
-		}
-	})
-	if allocs != 1 {
-		// bytes.NewBuffer should be the only allocation.
-		t.Errorf("Got %v allocs. Wanted 1", allocs)
-	}
-
-	if diff := cmp.Diff(m, got, protocmp.Transform()); diff != "" {
-		t.Errorf("Unmarshaler read: diff -want +got = %s", diff)
-	}
 }
 
 func BenchmarkUnmarshalFrom(b *testing.B) {
@@ -200,5 +172,21 @@ func TestUnmarshalFrom_UnexpectedEOF(t *testing.T) {
 	err := protodelim.UnmarshalFrom(bufio.NewReader(buf), out)
 	if got, want := err, io.ErrUnexpectedEOF; got != want {
 		t.Errorf("protodelim.UnmarshalFrom(size-only buf, _) = %v, want %v", got, want)
+	}
+}
+
+func TestUnmarshalFrom_PrematureHeader(t *testing.T) {
+	var data = []byte{128} // continuation bit set
+	err := protodelim.UnmarshalFrom(bytes.NewReader(data[:]), nil)
+	if got, want := err, io.ErrUnexpectedEOF; !errors.Is(got, want) {
+		t.Errorf("protodelim.UnmarshalFrom(%#v, nil) = %#v; want = %#v", data, got, want)
+	}
+}
+
+func TestUnmarshalFrom_InvalidVarint(t *testing.T) {
+	var data = bytes.Repeat([]byte{128}, 2*binary.MaxVarintLen64) // continuation bit set
+	err := protodelim.UnmarshalFrom(bytes.NewReader(data[:]), nil)
+	if err == nil {
+		t.Errorf("protodelim.UnmarshalFrom unexpectedly did not error on invalid varint")
 	}
 }
